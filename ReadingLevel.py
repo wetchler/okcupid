@@ -4,7 +4,7 @@ Tools for interpreting the reading level of a chunk of text.
 
 Created on Feb 20, 2011
 
-@author: Everett
+@author: Everett Wetchler (evee746)
 '''
 
 import gflags

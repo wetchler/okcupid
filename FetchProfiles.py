@@ -2,7 +2,7 @@
 '''
 Created on Jun 25, 2012
 
-@author: everettw
+@author: Everett Wetchler (evee746)
 '''
 
 import csv

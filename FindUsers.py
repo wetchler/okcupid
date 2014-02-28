@@ -2,7 +2,7 @@
 '''
 
 First version created on 2012-06-25
-@author: Everett Wetchler (evee746 on GitHub)
+@author: Everett Wetchler (evee746)
 '''
 
 # Native libraries
