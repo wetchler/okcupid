@@ -27,7 +27,7 @@ gflags.DEFINE_string(
     'See comments at the top for how to find your OKC session cookie.')
 
 
-def PrepareFlags(argv):
+def prepare_flags(argv):
     '''Set up flags. Returns true if the flag settings are acceptable.'''
     try:
         argv = FLAGS(argv)  # parse flags
@@ -40,7 +40,7 @@ def PrepareFlags(argv):
     return True
 
 
-def FetchLocation(location):
+def fetch_location(location):
     '''Queries OKCupid to get their location identifier number.
 
     The match search GET params require a "location id", which is an integer
@@ -60,7 +60,7 @@ def FetchLocation(location):
     return name, locid
 
 
-def ExtractUsernames(html):
+def extract_usernames(html):
     '''Parse the match search result page for usernames.'''
     soup = BeautifulSoup(html)
     usernames = soup.findAll(name='div', attrs={'class': 'username'})
@@ -175,13 +175,13 @@ class SliceGenerator():
 
 
 def main(argv):
-    if not PrepareFlags(argv):
+    if not prepare_flags(argv):
         print 'Invalid flag settings. Exiting.'
         sys.exit(1)
 
     cookies = {'session': FLAGS.session_cookie}
     print 'Cookies:', cookies
-    location_name, location_id = FetchLocation(FLAGS.location)
+    location_name, location_id = fetch_location(FLAGS.location)
     cityabbrev = ''.join([word[0] for word in location_name.split()]).lower()
     outfile = 'usernames.%s.%s.csv' % (
         cityabbrev, datetime.date.today().strftime('%Y%m%d'))
@@ -202,7 +202,7 @@ def main(argv):
             if r.status_code != 200:
                 print 'Request did not succeed. Will retry.'
             else:
-                usernames = ExtractUsernames(r.text)
+                usernames = extract_usernames(r.text)
                 # Write incrementally in case the program crashes
                 for u in usernames:
                     print >>f, ','.join([str(age), gender, u])

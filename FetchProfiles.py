@@ -1,33 +1,43 @@
 #!/usr/bin/python2.7
 '''
-Created on Jun 25, 2012
+One by one, fetch profile pages for OKCupid users. The input to this script
+is a file with a list of usernames of profiles to pull,
+
+Original version created on Jun 25, 2012
 
 @author: Everett Wetchler (evee746)
 '''
 
 import csv
 import datetime
-import gflags
 import random
-import requests
 import sys
 import time
 
+from BeautifulSoup import BeautifulSoup, UnicodeDammit
+import gflags
+import requests
+
 DEFAULT_COOKIE = '1780687262307760404%3a151924852332704912'
 FLAGS = gflags.FLAGS
+gflags.DEFINE_string('outfile', 'profiles.csv', 'Filename for output')
 gflags.DEFINE_boolean('pull_essays', False,
                       'If True, pulls free responses sections. If False, '
-                      'just basic form details.')
+                      'just basic profile details.')
 gflags.DEFINE_string('session_cookie', DEFAULT_COOKIE, '')
-gflags.DEFINE_string('outfile', '', '')
-gflags.DEFINE_string('usernames_file', '', '')
+gflags.DEFINE_string(
+    'usernames_file', 'usernames.csv', 'File with usernames to fetch')
+gflags.DEFINE_string(
+    'completed_usernames_file', 'completed_usernames.csv',
+    'File with usernames we have already fetched')
 
 
-SLEEP_BETWEEN_QUERIES = 2.5
+SLEEP_BETWEEN_QUERIES = 2
 PROFILE_URL = "http://www.okcupid.com/profile/%s"
 
 
-def GetProfile(username, opener):
+def pull_profile_and_essays(username):
+    '''Given a username, fetches the profile page and parses it.'''
     url = PROFILE_URL % username
     print "Fetching profile HTML for", username + "... ",
     html = None
@@ -36,189 +46,113 @@ def GetProfile(username, opener):
             print "Retrying...",
         try:
             r = requests.get(url, cookies={'session': FLAGS.session_cookie})
-            break
-        except urllib2.URLError, e:
-            print "Error fetching profile:", e
+            if r.status_code != 200:
+                print "Error, HTTP status code was %d, not 200" % r.status_code
+            else:
+                html = r.content
+                break
+        except requests.exceptions.RequestException, e:
+            print "Error completing HTTP request:", e
     if not html:
         print "Giving up."
-        return None
-    print "Parsing...",
-    profile = ParseProfileHtml(html, username)
-    return profile
+        return None, None
+    print "Parsing..."
+    profile, essays = parse_profile_html(html)
+    return profile, essays
 
 
-def ParseProfileHtml(html, username):
-    html = html.replace('\xe2\x80\x99', '\'')
-    html = "".join([x for x in html if ord(x)<128])
+def parse_profile_html(html):
+    '''Parses a user profile page into the data fields and essays.
+
+    It turns out parsing HTML, with all its escaped characters, and handling
+    wacky unicode characters, and writing them all out to a CSV file (later),
+    is a pain in the ass because everything that is not ASCII goes out of its
+    way to make your life hard.
+
+    During this function, we handle unescaping of html special
+    characters. Later, before writing to csv, we force everything to ASCII,
+    ignoring characters that don't play well.
+    '''
     html = html.lower()
-    # Sanity check that this is the right profile
-    expected_tag = '<p class="username">%s</p>' % username.lower()
-    idx = html.find(expected_tag)
-    if idx < 0:
-        print ("Bad or no-longer-existant profile. "
-               "HTML did not contain username tag: %s" % expected_tag)
-        f = open("badprofile_" + username + ".html", 'w')
-        print >>f, html
-        f.close()
-        return None
-    # Find the tag for basic info
-    basics_tag = '<p class="info">'
-    idx = html.find(basics_tag, idx)
-    if idx < 0:
-        print "Bad profile. Did not contain basic info tag: %s" % basics_tag
-        f = open("badprofile_" + username + ".html", 'w')
-        print >>f, html
-        f.close()
-        return None
-    start = idx + len(basics_tag)
-    end = html.find("<", start)
-    basic_info = html[start:end]    # '26 / M / Straight / Single / San Francisco, California'
-    age, sex, orientation, status, location = [x.strip() for x in basic_info.split("/")]
+    soup = BeautifulSoup(html, convertEntities=BeautifulSoup.HTML_ENTITIES)
+    NA = 'NA'
+    basics_soup = soup.find(name = 'div', attrs = {'id': 'basic_info'})
+    details_soup = soup.find(name='div', attrs={'id':'profile_details'})
+    essays_soup = soup.find(name='div', attrs={'id':'main_column'})
+    if not (basics_soup and details_soup and essays_soup):
+        print 'Profile likely deleted. Missing expected html structure.'
+        return None, None
     profile = {}
-    profile['age'] = int(age)
-    profile['sex'] = sex
-    profile['orientation'] = orientation
-    profile['status'] = status
-    profile['location'] = location
-    # Structured details
-    details_tag = '<div id="profile_details">'
-    idx = html.find(details_tag, end)
-    if idx < 0:
-        print "Bad profile. Did not contain details tag: %s" % details_tag
-        f = open("badprofile_" + username + ".html", 'w')
-        print >>f, html
-        f.close()
-        return None
-    details_section = html[(idx + len(details_tag)):html.find("</div>", idx)]
-    ExtractDetails(details_section, profile)
+    # Extract top-line profile data (age, gender, city) from tags like
+    # <span id='ajax_gender'>Female</span>
+    for tag in basics_soup.findAll(name = 'span')[1:]:  # Skip 'Last Online'
+        feature, value = tag['id'].split('_', 1)[1], tag.text.strip()
+        print feature, value
+        profile[feature] = value
+    # Extract personal data items from tags like
+    # <dd id='ajax_bodytype'>Female</span>
+    for tag in details_soup.findAll(name = 'dd'):
+        try:
+            feature, value = tag['id'].split('_', 1)[1], tag.text.strip()
+            if feature == 'height':
+                # Special case height to parse into inches
+                print value
+                feet, inches = [int(x[:-1]) for x in value.split()[:2]]
+                value = str(int(feet) * 12 + int(inches))
+            print feature, value
+            profile[feature] = value
+        except KeyError:
+            continue
     # Essays
-    if FLAGS.essays:
-        ExtractEssays(html, profile)
-    return profile
-
-def ExtractDetails(html, profile):
-    idx = html.find("<dt>")
-    while idx > 0:
-        start = idx + 4
-        end = html.find("</dt>", start)
-        category = html[start:end].strip()
-        start = html.find("<dd", end) + 3
-        # Sometimes it's <dd>, sometimes its <dd id="foo">
-        start = html.find(">", start) + 1
-        end = html.find("</dd>", start)
-        value = html[start:end].strip()
-        if category != "looking for":    # For some reason this one is commented out in HTML
-            profile[category] = Reformat(category, value)
-        idx = html.find("<dt>", end + 5)
-
-def Reformat(category, value):
-    INCOME_UNLISTED = -1
-    if value == '&mdash;':
-        if category == "income":
-            return INCOME_UNLISTED
-        return ""
-    if category == "last online":
-        if value == "online now!":
-            dt = datetime.datetime.now()
-        else:
-            # value should look like this:
-            # <span class="fancydate" id="fancydate_134068580564486"></span><script> FancyDate.add('fancydate_134068580564486', 1340607978, ''); </script> 
-            # so if this doesn't change, we can cheat and just split by commas
-            ts = value.split('fancydate')[-1].split(",")[1].strip()
-            dt = datetime.datetime.fromtimestamp(int(ts))
-        return dt.strftime("%Y-%m-%d-%H-%M")
-    elif category == "height":
-        # value should look like:
-        # 6&prime; 3&Prime; (1.91m).
-        feet = int(value.split("&")[0])
-        inches = int(value.split()[1].split("&")[0])
-        value = feet*12 + inches
-    elif category == "income":
-        # These are formatted as '$50,000&ndash;$60,000' or 'less than $20,000'
-        # We'll just take the first dollar value as a good-enough proxy.
-        value = value.replace(",", "")
-        start = value.find("$") + 1
-        if start <= 0:
-            return INCOME_UNLISTED
-        end = value.find("&ndash;")
-        if end < 0:
-            return int(value[start:])
-        else:
-            return int(value[start:end])
-    return value
-
-def ExtractEssays(html, profile):
-    for i in range(10):
-        profile["essay%d" % i] = ""
-    # Essays should appear inside divs that look like:
-    # <div id="essay_text_0" class="nostyle"> Essay content here </div>
-    tag = "<div id=\"essay_text_"
-    idx = html.find(tag)
-    while idx >= 0:
-        idx += len(tag)
-        num = int(html[idx])
-        start = html.find(">", idx) + 1
-        end = html.find("</div>", start)
-        profile["essay%d" % num] = html[start:end].strip()
-        idx = html.find(tag, end)
+    essays = {}
+    for e in essays_soup.findAll('div', recursive=False):
+        if e['id'].startswith('essay_'):
+            essay_id = int(e['id'].split('essay_')[1])
+            title = e.a.text
+            user_response = ''.join(
+                str(x) for x in e.div.div.contents).replace('<br />', '').strip()
+            essays[essay_id] = (title, user_response)
+        elif e['id'] == 'what_i_want':
+            # These are high-level details about what the user wants in a date
+            # TODO: parse and incorporate these as profile features
+            pass
+    return profile, essays
 
 
-FETCH_STATUS = '''%(elapsed)ds elapsed, %(completed)d profiles fetched, \
-%(deleted)d deleted, \
+TIMING_MSG = '''%(elapsed)ds elapsed, %(completed)d profiles fetched, \
+%(skipped)d skipped, \
 %(remaining)d left, %(secs_per_prof).1fs per profile, \
 %(prof_per_hour).0f profiles per hour, \
 %(est_hours_left).1f hours left'''
 
 
-def FetchProfilesWriteCSV(opener, usernames, randomize=True):
-    deleted_profiles = []
-    if randomize:
-        random.shuffle(usernames)
-    start = datetime.datetime.now()
-    last = start
-    first = True
-    with open('profiles.csv', 'wb') as f:
-        csv_writer = csv.writer(f)
-        for i,u in enumerate(usernames):
-            # ** Critical ** so OKC servers don't notice and throttle us
-            print "Sleeping..."
-            elapsed = datetime.datetime.now() - last
-            elapsed_sec = elapsed.seconds * 1.0 + elapsed.microseconds / 1.0e6
-            time.sleep(max(0, FLAGS.secs_between_queries - elapsed_sec))
-            # Go ahead
-            last = datetime.datetime.now()
-            profile = GetProfile(u, opener)
-            if not profile:
-                deleted_profiles.append(u)
-                skipped += 1
-                continue
-            row = tuple([u] + [profile[k] for k in sorted(profile)])
-            if first:
-                csv_writer.writerow(['username'] + list(sorted(profile)))
-                first = False
-            csv_writer.writerow(row)
-            if i % 10 == 0:
-                elapsed = datetime.datetime.now() - start
-                secs = elapsed.days*60*60*24 + elapsed.seconds
-                profiles_per_hour = (i+1.0)*3600/secs
-                print '\n' + FETCH_STATUS % {
-                    'elapsed': secs,
-                    'completed': i + 1,
-                    'deleted': len(deleted_profiles),
-                    'remaining': len(usernames) - i - 1,
-                    'secs_per_prof': secs/(i+1.0),
-                    'prof_per_hour': profiles_per_hour,
-                    'est_hours_left': (len(usernames) - i)/profiles_per_hour,
-                }
+def compute_elapsed_seconds(elapsed):
+    '''Given a timedelta, returns a float of total seconds elapsed.'''
+    return (elapsed.days * 60 * 60 * 24 +
+            elapsed.seconds + elapsed.microseconds / 1.0e6)
 
 
-def ReadUsernames():
-    rows = [r for r in csv.reader(open(FLAGS.usernames_file))]
-    idx = rows[0].index('usernames')
-    return [row[idx] for row in rows[1:]]
+def read_usernames(filename):
+    '''Extracts usernames from the given file, returning a sorted list.
+
+    The file should either be:
+        1) A list of usernames, one per line
+        2) A CSV file with a 'username' column (specified in its header line)
+    '''
+    try:
+        rows = [r for r in csv.reader(open(filename))]
+        try:
+            idx = rows[0].index('username')
+            unames = [row[idx].lower() for row in rows[1:]]
+        except ValueError:
+            unames = [r[0] for r in rows]
+        return sorted(set(unames))
+    except IOError, e:
+        # File doesn't exist
+        return []
 
 
-def PrepareFlags(argv):
+def prepare_flags(argv):
     '''Set up flags. Returns true if the flag settings are acceptable.'''
     try:
         argv = FLAGS(argv)  # parse flags
@@ -228,16 +162,70 @@ def PrepareFlags(argv):
 
 
 def main(argv):
-    if not PrepareFlags(argv):
-        print '%s\\nUsage: %s ARGS\\n%s' % (e, sys.argv[0], FLAGS)
+    if not prepare_flags(argv):
+        print 'Usage: %s ARGS\\n%s' % (sys.argv[0], FLAGS)
         sys.exit(1)
 
-    usernames = ReadUsernames()
-    if not usernames:
+    usernames_to_fetch = read_usernames(FLAGS.usernames_file)
+    if not usernames_to_fetch:
         print 'Failed to load usernames from %s' % FLAGS.usernames_file
         sys.exit(1)
+    print 'Read %d usernames to fetch' % len(usernames_to_fetch)
 
-    FetchProfilesWriteCSV(usernames)
+    completed = read_usernames(FLAGS.completed_usernames_file)
+    if completed:
+        usernames_to_fetch = sorted(set(usernames_to_fetch) - set(completed))
+        print '%d usernames were already fetched, leaving %d to do' % (
+            len(completed), len(usernames_to_fetch))
+
+    start = datetime.datetime.now()
+    last = start
+    headers_written = bool(completed)  # Only write headers if file is empty
+    skipped = 0
+    profile_writer = csv.writer(open(FLAGS.outfile, 'ab'))
+    completed_usernames_writer = open(FLAGS.completed_usernames_file, 'ab')
+    N = len(usernames_to_fetch)
+    # Fetch profiles
+    for i, username in enumerate(usernames_to_fetch):
+        # ** Critical ** so OKC servers don't notice and throttle us
+        if i > 0:
+            print "Sleeping..."
+            # elapsed = datetime.datetime.now() - last
+            # elapsed_sec = elapsed.seconds * 1.0 + elapsed.microseconds / 1.0e6
+            # time.sleep(max(0, SLEEP_BETWEEN_QUERIES - elapsed_sec))
+            time.sleep(SLEEP_BETWEEN_QUERIES)
+        # Go ahead
+        last = datetime.datetime.now()
+        profile, essays = pull_profile_and_essays(username)
+        # TODO: Save essays to separate CSV (ignoring for now)
+        if not profile:
+            skipped += 1
+        else:
+            if not headers_written:
+                header_row = ['username'] + list(sorted(profile))
+                profile_writer.writerow(
+                    [x.encode('ascii', 'ignore') for x in header_row])
+                headers_written = True
+            row = tuple([username] + [profile[k] for k in sorted(profile)])
+            row = [field.encode('ascii', 'ignore') for field in row]
+            print row
+            profile_writer.writerow(row)
+        print >>completed_usernames_writer, username
+        completed_usernames_writer.flush()
+        if i % 10 == 0:
+            elapsed = datetime.datetime.now() - start
+            secs = compute_elapsed_seconds(elapsed)
+            profiles_per_hour = (i+1.0)*3600/secs
+            print '\n' + TIMING_MSG % {
+                'elapsed': secs,
+                'completed': i + 1,
+                'skipped': skipped,
+                'remaining': N - i - 1,
+                'secs_per_prof': secs/(i+1.0),
+                'prof_per_hour': profiles_per_hour,
+                'est_hours_left': (N - i)/profiles_per_hour,
+            }
+
 
 
 if __name__ == '__main__':
