@@ -1,6 +1,9 @@
 #!/usr/bin/python2.7
 '''
-Created on Jun 25, 2012
+One by one, fetch profile pages for OKCupid users. The input to this script
+is a file with a list of usernames of profiles to pull,
+
+Original version created on Jun 25, 2012
 
 @author: Everett Wetchler (evee746)
 '''
@@ -91,9 +94,7 @@ def parse_profile_html(html):
     for tag in details_soup.findAll(name = 'dd'):
         try:
             feature, value = tag['id'].split('_', 1)[1], tag.text.strip()
-            if value == '-':
-                value = NA
-            elif feature == 'height':
+            if feature == 'height':
                 # Special case height to parse into inches
                 print value
                 feet, inches = [int(x[:-1]) for x in value.split()[:2]]
@@ -179,9 +180,9 @@ def main(argv):
 
     start = datetime.datetime.now()
     last = start
-    headers_written = False
+    headers_written = bool(completed)  # Only write headers if file is empty
     skipped = 0
-    profile_writer = csv.writer(open(FLAGS.outfile, 'wb'))
+    profile_writer = csv.writer(open(FLAGS.outfile, 'ab'))
     completed_usernames_writer = open(FLAGS.completed_usernames_file, 'ab')
     N = len(usernames_to_fetch)
     # Fetch profiles
@@ -224,6 +225,7 @@ def main(argv):
                 'prof_per_hour': profiles_per_hour,
                 'est_hours_left': (N - i)/profiles_per_hour,
             }
+
 
 
 if __name__ == '__main__':
