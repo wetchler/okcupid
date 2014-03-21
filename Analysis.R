@@ -5,7 +5,8 @@
 # Friday, January 24, 2014.
 #
 #------------------------------------------------------------------------------
-# Import the CSV file containing the OKC data using the read.csv() function.
+# After unzipping profiles.20120630.csv.zip, import the CSV file containing the
+# OKC data using the read.csv() function.
 profiles <- read.csv(file="profiles.20120630.csv", header=TRUE)
 
 # Delete essay responses to reduce data frame size
@@ -42,9 +43,11 @@ table(profiles$orientation, profiles$sex)
 table(profiles$orientation, profiles$sex) / n
 
 # One good way to visualize contigency tables is using a mosaicplot
-pdf("gender_vs_orientation.pdf", height=6, width=6)
+png("gender_vs_orientation.png", height=480, width=480)
 mosaicplot(table(profiles$sex, profiles$orientation), xlab="gender",
-           ylab="orientation", main="Gender vs Orientation")
+           ylab="orientation", 
+           main=paste("Gender vs Orientation (n=", n, ")", sep="")
+)
 dev.off()
 
 
@@ -99,7 +102,7 @@ hist(male.heights)
 
 # Hard to compare.  Let's make the x-axis range and the number of 
 # "buckets" in the histograms match
-pdf("heights_split_by_gender.pdf", height=10, width=8)
+png("heights_split_by_gender.png", height=480, width=660)
 par(mfrow=c(2,1))
 hist(female.heights, xlim=c(55, 80), breaks=25, main="Female Heights",
      xlab="height in inches")
